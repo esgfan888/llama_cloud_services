@@ -9,6 +9,7 @@ import httpx
 from pydantic import BaseModel
 from llama_cloud import (
     ExtractAgent as CloudExtractAgent,
+    ExtractAgentCreate,
     ExtractConfig,
     ExtractJob,
     ExtractJobCreate,
@@ -526,11 +527,13 @@ class LlamaExtract(BaseComponent):
 
         agent = self._run_in_thread(
             self._async_client.llama_extract.create_extraction_agent(
-                name=name,
-                data_schema=data_schema,
-                config=config or DEFAULT_EXTRACT_CONFIG,
                 project_id=self._project_id,
                 organization_id=self._organization_id,
+                request=ExtractAgentCreate(
+                    name=name,
+                    data_schema=data_schema,
+                    config=config or DEFAULT_EXTRACT_CONFIG,
+                ),
             )
         )
 
