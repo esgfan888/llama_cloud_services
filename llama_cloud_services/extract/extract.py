@@ -14,6 +14,8 @@ from llama_cloud import (
     ExtractJob,
     ExtractJobCreate,
     ExtractRun,
+    ExtractSchemaValidateRequest,
+    ExtractAgentUpdate,
     File,
     ExtractMode,
     StatusEnum,
@@ -115,7 +117,7 @@ class ExtractionAgent:
             )
         validated_schema = self._run_in_thread(
             self._client.llama_extract.validate_extraction_schema(
-                data_schema=processed_schema
+                request=ExtractSchemaValidateRequest(data_schema=processed_schema)
             )
         )
         self._data_schema = validated_schema.data_schema
@@ -188,8 +190,10 @@ class ExtractionAgent:
         self._agent = self._run_in_thread(
             self._client.llama_extract.update_extraction_agent(
                 extraction_agent_id=self.id,
-                data_schema=self.data_schema,
-                config=self.config,
+                request=ExtractAgentUpdate(
+                    data_schema=self.data_schema,
+                    config=self.config,
+                ),
             )
         )
 
