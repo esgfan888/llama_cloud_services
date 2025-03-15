@@ -851,9 +851,7 @@ class LlamaParse(BasePydanticReader):
                         raise Exception(f"Timeout while parsing the file: {job_id}")
                     if verbose and tries % 10 == 0:
                         print(".", end="", flush=True)
-                    current_interval = self._calculate_backoff(
-                        min(tries, 10), current_interval
-                    )
+                    current_interval = self._calculate_backoff(current_interval)
                 else:
                     error_code = result_json.get("error_code", "No error code found")
                     error_message = result_json.get(
@@ -879,14 +877,12 @@ class LlamaParse(BasePydanticReader):
                     raise Exception(
                         f"Timeout while parsing the file: {job_id}"
                     ) from err
-                current_interval = self._calculate_backoff(
-                    error_count, current_interval
-                )
                 if verbose and tries % 10 == 0:
                     print(
-                        f"HTTP error: {err}, retrying in {current_interval}s...",
+                        f"HTTP error: {err}...",
                         flush=True,
                     )
+                current_interval = self._calculate_backoff(current_interval)
 
     async def _aload_data(
         self,
