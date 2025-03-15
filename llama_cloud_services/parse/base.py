@@ -804,7 +804,6 @@ class LlamaParse(BasePydanticReader):
         """Calculate the next backoff interval based on the backoff pattern.
 
         Args:
-            count: The count to use for calculation (either error count or tries)
             current_interval: The current interval in seconds
 
         Returns:
