@@ -4,6 +4,7 @@ import os
 import time
 from contextlib import asynccontextmanager
 from copy import deepcopy
+from enum import Enum
 from io import BufferedIOBase
 from pathlib import Path, PurePath, PurePosixPath
 from typing import Any, AsyncGenerator, Dict, List, Optional, Union
@@ -52,6 +53,14 @@ def build_url(
     return base_url
 
 
+class BackoffPattern(str, Enum):
+    """Backoff pattern for polling."""
+
+    CONSTANT = "constant"
+    LINEAR = "linear"
+    EXPONENTIAL = "exponential"
+
+
 class LlamaParse(BasePydanticReader):
     """A smart-parser for files."""
 
@@ -76,6 +85,19 @@ class LlamaParse(BasePydanticReader):
     check_interval: int = Field(
         default=1,
         description="The interval in seconds to check if the parsing is done.",
+    )
+
+    backoff_pattern: BackoffPattern = Field(
+        default=BackoffPattern.LINEAR,
+        description="Controls the backoff mode: 'constant', 'linear', or 'exponential'.",
+    )
+    max_check_interval: int = Field(
+        default=5,
+        description="Maximum interval in seconds between polls.",
+    )
+    max_error_count: int = Field(
+        default=4,
+        description="Maximum number of retryable errors before giving up.",
     )
 
     custom_client: Optional[httpx.AsyncClient] = Field(
@@ -787,49 +809,115 @@ class LlamaParse(BasePydanticReader):
     ) -> Dict[str, Any]:
         start = time.time()
         tries = 0
+        error_count = 0
+        current_interval = self.check_interval
 
         # so we're not re-setting the headers & stuff on each
         # usage... assume that there is not some other
         # coro also modifying base_url and the other client related configs.
         client = self.aclient
         while True:
-            await asyncio.sleep(self.check_interval)
-            tries += 1
-            result = await client.get(JOB_STATUS_ROUTE.format(job_id=job_id))
-            if result.status_code != 200:
-                end = time.time()
-                if end - start > self.max_timeout:
-                    raise Exception(f"Timeout while parsing the file: {job_id}")
+            try:
+                await asyncio.sleep(current_interval)
+                tries += 1
+                result = await client.get(JOB_STATUS_ROUTE.format(job_id=job_id))
+                
+                # Handle HTTP errors
+                if result.status_code >= 500:
+                    error_count += 1
+                    if error_count > self.max_error_count:
+                        raise Exception(f"Too many server errors while checking job status: {job_id}")
+                    
+                    # Calculate next interval based on backoff pattern
+                    if self.backoff_pattern == BackoffPattern.CONSTANT:
+                        current_interval = self.check_interval
+                    elif self.backoff_pattern == BackoffPattern.LINEAR:
+                        current_interval = min(self.check_interval * error_count, self.max_check_interval)
+                    elif self.backoff_pattern == BackoffPattern.EXPONENTIAL:
+                        current_interval = min(self.check_interval * (2 ** (error_count - 1)), self.max_check_interval)
+                    
+                    if verbose and tries % 10 == 0:
+                        print(f"Server error (HTTP {result.status_code}), retrying in {current_interval}s...", flush=True)
+                    continue
+                
+                if result.status_code != 200:
+                    end = time.time()
+                    if end - start > self.max_timeout:
+                        raise Exception(f"Timeout while parsing the file: {job_id}")
+                    if verbose and tries % 10 == 0:
+                        print(".", end="", flush=True)
+                    continue
+
+                # Allowed values "PENDING", "SUCCESS", "ERROR", "CANCELED"
+                result_json = result.json()
+                status = result_json["status"]
+                if status == "SUCCESS":
+                    parsed_result = await client.get(
+                        JOB_RESULT_URL.format(job_id=job_id, result_type=result_type),
+                    )
+                    return parsed_result.json()
+
+                elif status == "PENDING":
+                    end = time.time()
+                    if end - start > self.max_timeout:
+                        raise Exception(f"Timeout while parsing the file: {job_id}")
+                    if verbose and tries % 10 == 0:
+                        print(".", end="", flush=True)
+                    
+                    # Reset error count on successful status check
+                    error_count = 0
+                    
+                    # Calculate next interval based on backoff pattern
+                    if self.backoff_pattern == BackoffPattern.CONSTANT:
+                        current_interval = self.check_interval
+                    elif self.backoff_pattern == BackoffPattern.LINEAR:
+                        current_interval = min(self.check_interval * tries, self.max_check_interval)
+                    elif self.backoff_pattern == BackoffPattern.EXPONENTIAL:
+                        current_interval = min(self.check_interval * (2 ** (min(tries, 10) - 1)), self.max_check_interval)
+
+                else:
+                    error_code = result_json.get("error_code", "No error code found")
+                    error_message = result_json.get(
+                        "error_message", "No error message found"
+                    )
+
+                    exception_str = f"Job ID: {job_id} failed with status: {status}, Error code: {error_code}, Error message: {error_message}"
+                    raise Exception(exception_str)
+                    
+            except httpx.HTTPStatusError as err:
+                error_count += 1
+                if error_count > self.max_error_count:
+                    raise Exception(f"Too many HTTP errors while checking job status: {err}") from err
+                
+                # Calculate next interval based on backoff pattern
+                if self.backoff_pattern == BackoffPattern.CONSTANT:
+                    current_interval = self.check_interval
+                elif self.backoff_pattern == BackoffPattern.LINEAR:
+                    current_interval = min(self.check_interval * error_count, self.max_check_interval)
+                elif self.backoff_pattern == BackoffPattern.EXPONENTIAL:
+                    current_interval = min(self.check_interval * (2 ** (error_count - 1)), self.max_check_interval)
+                
                 if verbose and tries % 10 == 0:
-                    print(".", end="", flush=True)
-                await asyncio.sleep(self.check_interval)
+                    print(f"HTTP error: {err}, retrying in {current_interval}s...", flush=True)
                 continue
-
-            # Allowed values "PENDING", "SUCCESS", "ERROR", "CANCELED"
-            result_json = result.json()
-            status = result_json["status"]
-            if status == "SUCCESS":
-                parsed_result = await client.get(
-                    JOB_RESULT_URL.format(job_id=job_id, result_type=result_type),
-                )
-                return parsed_result.json()
-
-            elif status == "PENDING":
-                end = time.time()
-                if end - start > self.max_timeout:
-                    raise Exception(f"Timeout while parsing the file: {job_id}")
+                
+            except (httpx.ConnectError, httpx.ReadError, httpx.WriteError, 
+                    httpx.ConnectTimeout, httpx.ReadTimeout, httpx.WriteTimeout) as err:
+                error_count += 1
+                if error_count > self.max_error_count:
+                    raise Exception(f"Too many connection errors while checking job status: {err}") from err
+                
+                # Calculate next interval based on backoff pattern
+                if self.backoff_pattern == BackoffPattern.CONSTANT:
+                    current_interval = self.check_interval
+                elif self.backoff_pattern == BackoffPattern.LINEAR:
+                    current_interval = min(self.check_interval * error_count, self.max_check_interval)
+                elif self.backoff_pattern == BackoffPattern.EXPONENTIAL:
+                    current_interval = min(self.check_interval * (2 ** (error_count - 1)), self.max_check_interval)
+                
                 if verbose and tries % 10 == 0:
-                    print(".", end="", flush=True)
-                await asyncio.sleep(self.check_interval)
-
-            else:
-                error_code = result_json.get("error_code", "No error code found")
-                error_message = result_json.get(
-                    "error_message", "No error message found"
-                )
-
-                exception_str = f"Job ID: {job_id} failed with status: {status}, Error code: {error_code}, Error message: {error_message}"
-                raise Exception(exception_str)
+                    print(f"Connection error: {err}, retrying in {current_interval}s...", flush=True)
+                continue
 
     async def _aload_data(
         self,
