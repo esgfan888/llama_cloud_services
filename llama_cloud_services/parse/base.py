@@ -813,9 +813,11 @@ class LlamaParse(BasePydanticReader):
         if self.backoff_pattern == BackoffPattern.CONSTANT:
             return current_interval
         elif self.backoff_pattern == BackoffPattern.LINEAR:
-            return min(current_interval * count, self.max_check_interval)
+            return min(current_interval * count, float(self.max_check_interval))
         elif self.backoff_pattern == BackoffPattern.EXPONENTIAL:
-            return min(current_interval * (2 ** (count - 1)), self.max_check_interval)
+            return min(
+                current_interval * (2 ** (count - 1)), float(self.max_check_interval)
+            )
         return current_interval  # Default fallback
 
     async def _get_job_result(
@@ -824,7 +826,7 @@ class LlamaParse(BasePydanticReader):
         start = time.time()
         tries = 0
         error_count = 0
-        current_interval = self.check_interval
+        current_interval: float = float(self.check_interval)
 
         # so we're not re-setting the headers & stuff on each
         # usage... assume that there is not some other
@@ -835,32 +837,7 @@ class LlamaParse(BasePydanticReader):
                 await asyncio.sleep(current_interval)
                 tries += 1
                 result = await client.get(JOB_STATUS_ROUTE.format(job_id=job_id))
-                
-                # Handle HTTP errors
-                if result.status_code >= 500:
-                    error_count += 1
-                    end = time.time()
-                    if end - start > self.max_timeout:
-                        raise Exception(f"Timeout while parsing the file: {job_id}")
-                    
-                    # Calculate next interval based on backoff pattern
-                    current_interval = self._calculate_backoff(error_count, current_interval)
-                    
-                    if verbose and tries % 10 == 0:
-                        print(f"Server error (HTTP {result.status_code}), retrying in {current_interval}s...", flush=True)
-                    continue
-                
-                # Reset error count on successful HTTP response
-                error_count = 0
-                
-                if result.status_code != 200:
-                    end = time.time()
-                    if end - start > self.max_timeout:
-                        raise Exception(f"Timeout while parsing the file: {job_id}")
-                    if verbose and tries % 10 == 0:
-                        print(".", end="", flush=True)
-                    continue
-
+                result.raise_for_status()  # this raises if status is not 2xx
                 # Allowed values "PENDING", "SUCCESS", "ERROR", "CANCELED"
                 result_json = result.json()
                 status = result_json["status"]
@@ -875,29 +852,42 @@ class LlamaParse(BasePydanticReader):
                         raise Exception(f"Timeout while parsing the file: {job_id}")
                     if verbose and tries % 10 == 0:
                         print(".", end="", flush=True)
-                    
-                    # Calculate next interval based on backoff pattern
-                    current_interval = self._calculate_backoff(min(tries, 10), current_interval)
+                    current_interval = self._calculate_backoff(
+                        min(tries, 10), current_interval
+                    )
                 else:
                     error_code = result_json.get("error_code", "No error code found")
                     error_message = result_json.get(
                         "error_message", "No error message found"
                     )
-                    exception_str = f"Job ID: {job_id} failed with status: {status}, Error code: {error_code}, Error message: {error_message}"
+                    exception_str = (
+                        f"Job ID: {job_id} failed with status: {status}, "
+                        f"Error code: {error_code}, Error message: {error_message}"
+                    )
                     raise Exception(exception_str)
-            except (httpx.ConnectError, httpx.ReadError, httpx.WriteError, 
-                    httpx.ConnectTimeout, httpx.ReadTimeout, httpx.WriteTimeout, httpx.HTTPStatusError) as err:
+            except (
+                httpx.ConnectError,
+                httpx.ReadError,
+                httpx.WriteError,
+                httpx.ConnectTimeout,
+                httpx.ReadTimeout,
+                httpx.WriteTimeout,
+                httpx.HTTPStatusError,
+            ) as err:
                 error_count += 1
                 end = time.time()
                 if end - start > self.max_timeout:
-                    raise Exception(f"Timeout while parsing the file: {job_id}") from err
-                
-                # Calculate next interval based on backoff pattern
-                current_interval = self._calculate_backoff(error_count, current_interval)
-                
+                    raise Exception(
+                        f"Timeout while parsing the file: {job_id}"
+                    ) from err
+                current_interval = self._calculate_backoff(
+                    error_count, current_interval
+                )
                 if verbose and tries % 10 == 0:
-                    print(f"HTTP error: {err}, retrying in {current_interval}s...", flush=True)
-                continue
+                    print(
+                        f"HTTP error: {err}, retrying in {current_interval}s...",
+                        flush=True,
+                    )
 
     async def _aload_data(
         self,
