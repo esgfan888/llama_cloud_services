@@ -814,9 +814,7 @@ class LlamaParse(BasePydanticReader):
         elif self.backoff_pattern == BackoffPattern.LINEAR:
             return min(current_interval + 1, float(self.max_check_interval))
         elif self.backoff_pattern == BackoffPattern.EXPONENTIAL:
-            return min(
-                current_interval * 2, float(self.max_check_interval)
-            )
+            return min(current_interval * 2, float(self.max_check_interval))
         return current_interval  # Default fallback
 
     async def _get_job_result(
