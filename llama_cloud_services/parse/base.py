@@ -800,7 +800,7 @@ class LlamaParse(BasePydanticReader):
             if file_handle is not None:
                 file_handle.close()
 
-    def _calculate_backoff(self, count: int, current_interval: float) -> float:
+    def _calculate_backoff(self, current_interval: float) -> float:
         """Calculate the next backoff interval based on the backoff pattern.
 
         Args:
@@ -813,10 +813,10 @@ class LlamaParse(BasePydanticReader):
         if self.backoff_pattern == BackoffPattern.CONSTANT:
             return current_interval
         elif self.backoff_pattern == BackoffPattern.LINEAR:
-            return min(current_interval * count, float(self.max_check_interval))
+            return min(current_interval + 1, float(self.max_check_interval))
         elif self.backoff_pattern == BackoffPattern.EXPONENTIAL:
             return min(
-                current_interval * (2 ** (count - 1)), float(self.max_check_interval)
+                current_interval * 2, float(self.max_check_interval)
             )
         return current_interval  # Default fallback
 
