@@ -89,15 +89,15 @@ class LlamaParse(BasePydanticReader):
 
     backoff_pattern: BackoffPattern = Field(
         default=BackoffPattern.LINEAR,
-        description="Controls the backoff mode: 'constant', 'linear', or 'exponential'.",
+        description="Controls the backoff pattern when retrying failed requests: 'constant', 'linear', or 'exponential'.",
     )
     max_check_interval: int = Field(
         default=5,
-        description="Maximum interval in seconds between polls.",
+        description="Maximum interval in seconds between polling attempts when checking job status.",
     )
     max_error_count: int = Field(
         default=4,
-        description="Maximum number of retryable errors before giving up.",
+        description="Maximum number of consecutive retryable errors before giving up on a request.",
     )
 
     custom_client: Optional[httpx.AsyncClient] = Field(
@@ -804,6 +804,24 @@ class LlamaParse(BasePydanticReader):
             if file_handle is not None:
                 file_handle.close()
 
+    def _calculate_backoff(self, count: int, current_interval: float) -> float:
+        """Calculate the next backoff interval based on the backoff pattern.
+
+        Args:
+            count: The count to use for calculation (either error count or tries)
+            current_interval: The current interval in seconds
+
+        Returns:
+            The next interval in seconds
+        """
+        if self.backoff_pattern == BackoffPattern.CONSTANT:
+            return current_interval
+        elif self.backoff_pattern == BackoffPattern.LINEAR:
+            return min(current_interval * count, self.max_check_interval)
+        elif self.backoff_pattern == BackoffPattern.EXPONENTIAL:
+            return min(current_interval * (2 ** (count - 1)), self.max_check_interval)
+        return current_interval  # Default fallback
+
     async def _get_job_result(
         self, job_id: str, result_type: str, verbose: bool = False
     ) -> Dict[str, Any]:
@@ -829,16 +847,14 @@ class LlamaParse(BasePydanticReader):
                         raise Exception(f"Too many server errors while checking job status: {job_id}")
                     
                     # Calculate next interval based on backoff pattern
-                    if self.backoff_pattern == BackoffPattern.CONSTANT:
-                        current_interval = self.check_interval
-                    elif self.backoff_pattern == BackoffPattern.LINEAR:
-                        current_interval = min(self.check_interval * error_count, self.max_check_interval)
-                    elif self.backoff_pattern == BackoffPattern.EXPONENTIAL:
-                        current_interval = min(self.check_interval * (2 ** (error_count - 1)), self.max_check_interval)
+                    current_interval = self._calculate_backoff(error_count, current_interval)
                     
                     if verbose and tries % 10 == 0:
                         print(f"Server error (HTTP {result.status_code}), retrying in {current_interval}s...", flush=True)
                     continue
+                
+                # Reset error count on successful HTTP response
+                error_count = 0
                 
                 if result.status_code != 200:
                     end = time.time()
@@ -864,16 +880,8 @@ class LlamaParse(BasePydanticReader):
                     if verbose and tries % 10 == 0:
                         print(".", end="", flush=True)
                     
-                    # Reset error count on successful status check
-                    error_count = 0
-                    
                     # Calculate next interval based on backoff pattern
-                    if self.backoff_pattern == BackoffPattern.CONSTANT:
-                        current_interval = self.check_interval
-                    elif self.backoff_pattern == BackoffPattern.LINEAR:
-                        current_interval = min(self.check_interval * tries, self.max_check_interval)
-                    elif self.backoff_pattern == BackoffPattern.EXPONENTIAL:
-                        current_interval = min(self.check_interval * (2 ** (min(tries, 10) - 1)), self.max_check_interval)
+                    current_interval = self._calculate_backoff(min(tries, 10), current_interval)
 
                 else:
                     error_code = result_json.get("error_code", "No error code found")
@@ -890,12 +898,7 @@ class LlamaParse(BasePydanticReader):
                     raise Exception(f"Too many HTTP errors while checking job status: {err}") from err
                 
                 # Calculate next interval based on backoff pattern
-                if self.backoff_pattern == BackoffPattern.CONSTANT:
-                    current_interval = self.check_interval
-                elif self.backoff_pattern == BackoffPattern.LINEAR:
-                    current_interval = min(self.check_interval * error_count, self.max_check_interval)
-                elif self.backoff_pattern == BackoffPattern.EXPONENTIAL:
-                    current_interval = min(self.check_interval * (2 ** (error_count - 1)), self.max_check_interval)
+                current_interval = self._calculate_backoff(error_count, current_interval)
                 
                 if verbose and tries % 10 == 0:
                     print(f"HTTP error: {err}, retrying in {current_interval}s...", flush=True)
@@ -908,12 +911,7 @@ class LlamaParse(BasePydanticReader):
                     raise Exception(f"Too many connection errors while checking job status: {err}") from err
                 
                 # Calculate next interval based on backoff pattern
-                if self.backoff_pattern == BackoffPattern.CONSTANT:
-                    current_interval = self.check_interval
-                elif self.backoff_pattern == BackoffPattern.LINEAR:
-                    current_interval = min(self.check_interval * error_count, self.max_check_interval)
-                elif self.backoff_pattern == BackoffPattern.EXPONENTIAL:
-                    current_interval = min(self.check_interval * (2 ** (error_count - 1)), self.max_check_interval)
+                current_interval = self._calculate_backoff(error_count, current_interval)
                 
                 if verbose and tries % 10 == 0:
                     print(f"Connection error: {err}, retrying in {current_interval}s...", flush=True)
