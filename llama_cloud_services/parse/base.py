@@ -18,11 +18,13 @@ from llama_index.core.readers.base import BasePydanticReader
 from llama_index.core.readers.file.base import get_default_fs
 from llama_index.core.schema import Document
 
+from llama_cloud_services.parse.result import ParseResult
 from llama_cloud_services.parse.utils import (
     SUPPORTED_FILE_TYPES,
     ResultType,
     nest_asyncio_err,
     nest_asyncio_msg,
+    make_api_request,
 )
 
 # can put in a path to the file or the file bytes itself
@@ -772,7 +774,7 @@ class LlamaParse(BasePydanticReader):
 
         try:
             url = build_url(JOB_UPLOAD_ROUTE, self.organization_id, self.project_id)
-            resp = await self.aclient.post(url, files=files, data=data)  # type: ignore
+            resp = await make_api_request(self.aclient, "POST", url, timeout=self.max_timeout, files=files, data=data)  # type: ignore
             resp.raise_for_status()  # this raises if status is not 2xx
             return resp.json()["id"]
         except httpx.HTTPStatusError as err:  # this catches it
@@ -809,8 +811,11 @@ class LlamaParse(BasePydanticReader):
             result_json = result.json()
             status = result_json["status"]
             if status == "SUCCESS":
-                parsed_result = await client.get(
+                parsed_result = await make_api_request(
+                    client,
+                    "GET",
                     JOB_RESULT_URL.format(job_id=job_id, result_type=result_type),
+                    timeout=self.max_timeout,
                 )
                 return parsed_result.json()
 
@@ -923,6 +928,149 @@ class LlamaParse(BasePydanticReader):
             else:
                 raise e
 
+    async def aparse(
+        self,
+        file_path: Union[List[FileInput], FileInput],
+        extra_info: Optional[dict] = None,
+        fs: Optional[AbstractFileSystem] = None,
+    ) -> Union[List["ParseResult"], "ParseResult"]:
+        """
+        Parse the file and return a ParseResult object instead of Document objects.
+
+        This method is similar to aload_data but returns ParseResult objects that provide
+        direct access to the various output formats (text, markdown, json, etc.)
+
+        Args:
+            file_path: Path to the file to parse. Can be a string, path, bytes, file-like object, or a list of these.
+            extra_info: Additional metadata to include in the result.
+            fs: Optional filesystem to use for reading files.
+
+        Returns:
+            ParseResult object or list of ParseResult objects if multiple files were provided
+        """
+
+        if isinstance(file_path, (str, PurePosixPath, Path, bytes, BufferedIOBase)):
+            job_id = await self._create_job(file_path, extra_info=extra_info, fs=fs)
+            if self.verbose:
+                print("Started parsing the file under job_id %s" % job_id)
+
+            # Create ParseResult with just job_id initially
+            if isinstance(file_path, (bytes, BufferedIOBase)):
+                if not extra_info or "file_name" not in extra_info:
+                    raise ValueError(
+                        "file_name must be provided in extra_info when passing bytes"
+                    )
+                file_name = extra_info["file_name"]
+            else:
+                file_name = str(file_path)
+
+            job_result = await self._get_job_result(
+                job_id, ResultType.JSON.value, verbose=self.verbose
+            )
+            parse_result = ParseResult(
+                job_id=job_id,
+                file_name=file_name,
+                job_result=job_result,
+                api_key=self.api_key,
+                base_url=self.base_url,
+                client=self.aclient,
+            )
+
+            return parse_result
+
+        elif isinstance(file_path, list):
+            jobs = [
+                self._create_job(
+                    f,
+                    extra_info=extra_info,
+                    fs=fs,
+                )
+                for f in file_path
+            ]
+            file_names = []
+            for f in file_path:
+                if isinstance(f, (bytes, BufferedIOBase)):
+                    if not extra_info or "file_name" not in extra_info:
+                        raise ValueError(
+                            "file_name must be provided in extra_info when passing bytes"
+                        )
+                    file_names.append(extra_info["file_name"])
+                else:
+                    file_names.append(str(f))
+
+            try:
+                job_ids = await run_jobs(
+                    jobs,
+                    workers=self.num_workers,
+                    desc="Creating parsing jobs",
+                    show_progress=self.show_progress,
+                )
+
+                job_results = await run_jobs(
+                    [
+                        self._get_job_result(
+                            job_id, ResultType.JSON.value, verbose=self.verbose
+                        )
+                        for job_id in job_ids
+                    ],
+                    workers=self.num_workers,
+                    desc="Getting job results",
+                    show_progress=self.show_progress,
+                )
+
+                # Create ParseResults just with job_ids initially
+                parse_results = [
+                    ParseResult(
+                        job_id=job_id,
+                        file_name=file_names[i],
+                        job_result=job_results[i],
+                        api_key=self.api_key,
+                        base_url=self.base_url,
+                        client=self.aclient,
+                    )
+                    for i, job_id in enumerate(job_ids)
+                ]
+
+                return parse_results
+
+            except RuntimeError as e:
+                if nest_asyncio_err in str(e):
+                    raise RuntimeError(nest_asyncio_msg)
+                else:
+                    raise e
+        else:
+            raise ValueError(
+                "The input file_path must be a string or a list of strings."
+            )
+
+    def parse(
+        self,
+        file_path: Union[List[FileInput], FileInput],
+        extra_info: Optional[dict] = None,
+        fs: Optional[AbstractFileSystem] = None,
+    ) -> Union[List["ParseResult"], "ParseResult"]:
+        """
+        Parse the file and return a ParseResult object instead of Document objects.
+
+        This method is similar to load_data but returns ParseResult objects that provide
+        direct access to the various output formats (text, markdown, json, etc.)
+
+        Args:
+            file_path: Path to the file to parse. Can be a string, path, bytes, file-like object, or a list of these.
+            extra_info: Additional metadata to include in the result.
+            fs: Optional filesystem to use for reading files.
+
+        Returns:
+            ParseResult object or list of ParseResult objects if multiple files were provided
+        """
+        try:
+            return asyncio_run(self.aparse(file_path, extra_info, fs=fs))
+        except RuntimeError as e:
+            if nest_asyncio_err in str(e):
+                raise RuntimeError(nest_asyncio_msg)
+            else:
+                raise e
+
     async def _aget_json(
         self, file_path: FileInput, extra_info: Optional[dict] = None
     ) -> List[dict]:
@@ -990,6 +1138,14 @@ class LlamaParse(BasePydanticReader):
             else:
                 raise e
 
+    def get_json(
+        self,
+        file_path: Union[List[FileInput], FileInput],
+        extra_info: Optional[dict] = None,
+    ) -> List[dict]:
+        """Load data from the input path."""
+        return self.get_json_result(file_path, extra_info)
+
     async def aget_assets(
         self, json_result: List[dict], download_path: str, asset_key: str
     ) -> List[dict]:
@@ -1028,7 +1184,9 @@ class LlamaParse(BasePydanticReader):
 
                         with open(asset_path, "wb") as f:
                             asset_url = f"{self.base_url}/api/parsing/job/{job_id}/result/image/{asset_name}"
-                            resp = await client.get(asset_url)
+                            resp = await make_api_request(
+                                client, "GET", asset_url, timeout=self.max_timeout
+                            )
                             resp.raise_for_status()
                             f.write(resp.content)
                         assets.append(asset)
@@ -1113,7 +1271,9 @@ class LlamaParse(BasePydanticReader):
                     xlsx_url = (
                         f"{self.base_url}/api/parsing/job/{job_id}/result/raw/xlsx"
                     )
-                    res = await client.get(xlsx_url)
+                    res = await make_api_request(
+                        client, "GET", xlsx_url, timeout=self.max_timeout
+                    )
                     res.raise_for_status()
                     f.write(res.content)
                 xlsx_list.append(xlsx)
