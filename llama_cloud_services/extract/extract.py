@@ -22,6 +22,7 @@ from llama_cloud import (
     Project,
     ExtractTarget,
     LlamaExtractSettings,
+    PaginatedExtractRunsResponse,
 )
 from llama_cloud.client import AsyncLlamaCloud
 from llama_cloud_services.extract.utils import JSONObjectType, augment_async_errors
@@ -380,15 +381,29 @@ class ExtractionAgent:
             )
         )
 
-    def list_extraction_runs(self) -> List[ExtractRun]:
+    def delete_extraction_run(self, run_id: str) -> None:
+        """Delete an extraction run by ID.
+
+        Args:
+            run_id (str): The ID of the extraction run to delete
+        """
+        self._run_in_thread(
+            self._client.llama_extract.delete_extraction_run(run_id=run_id)
+        )
+
+    def list_extraction_runs(
+        self, page: int = 0, limit: int = 100
+    ) -> PaginatedExtractRunsResponse:
         """List extraction runs for the extraction agent.
 
         Returns:
-            List[ExtractRun]: List of extraction runs
+            PaginatedExtractRunsResponse: Paginated list of extraction runs
         """
         return self._run_in_thread(
             self._client.llama_extract.list_extract_runs(
                 extraction_agent_id=self.id,
+                skip=page * limit,
+                limit=limit,
             )
         )
 
