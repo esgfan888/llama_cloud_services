@@ -4,7 +4,13 @@ from pydantic import BaseModel, Field, PrivateAttr
 from typing import List, Optional, Dict, Any, Union
 
 from llama_index.core.async_utils import asyncio_run
-from llama_cloud_services.parse.types import JobResult, JobMetadata, Page
+from llama_cloud_services.parse.types import (
+    JobResult,
+    JobMetadata,
+    Page,
+    LayoutItem,
+    ImageItem,
+)
 from llama_cloud_services.parse.utils import make_api_request
 
 
@@ -54,29 +60,33 @@ class ParseResult(BaseModel):
         self._client.base_url = self._base_url
         self._client.headers["Authorization"] = f"Bearer {self._api_key}"
 
-    def get_text(self, split_pages: bool = False) -> Union[str, List[str]]:
+    def get_text(
+        self, split_by_page: bool = False, page_separator: str = "\n\n"
+    ) -> Union[str, List[str]]:
         """
         Get the plain text result of the parsing job.
 
         Returns:
             The plain text content
         """
-        if split_pages:
+        if split_by_page:
             return [page.text for page in self._job_result.pages]
 
-        return "\n".join([page.text for page in self._job_result.pages])
+        return page_separator.join([page.text for page in self._job_result.pages])
 
-    def get_markdown(self, split_pages: bool = False) -> Union[str, List[str]]:
+    def get_markdown(
+        self, split_by_page: bool = False, page_separator: str = "\n\n"
+    ) -> Union[str, List[str]]:
         """
         Get the markdown result of the parsing job.
 
         Returns:
             The markdown content
         """
-        if split_pages:
+        if split_by_page:
             return [page.md for page in self._job_result.pages]
 
-        return "\n".join([page.md for page in self._job_result.pages])
+        return page_separator.join([page.md for page in self._job_result.pages])
 
     def get_json(self) -> List[Dict[str, Any]]:
         """
@@ -100,27 +110,14 @@ class ParseResult(BaseModel):
             if page.structuredData is not None
         ]
 
-    def get_images(self) -> List[Dict[str, Any]]:
+    def get_images(self) -> List[List[ImageItem]]:
         """
         Get information about the images from the parsing job.
 
         Returns:
             A list of image information
         """
-        images = []
-        # Collect images from all pages
-        for page in self._job_result.pages:
-            for img in page.images:
-                # Convert to dictionary with additional page info
-                if isinstance(img, str):
-                    # If image is just a string (name), create a dict
-                    images.append({"name": img, "page": page.page})
-                else:
-                    # If image is already a dict or object, add page info
-                    img_dict = img if isinstance(img, dict) else img.dict()
-                    img_dict["page"] = page.page
-                    images.append(img_dict)
-        return images
+        return [page.images for page in self._job_result.pages]
 
     def get_image_names(self) -> List[str]:
         """
@@ -130,7 +127,7 @@ class ParseResult(BaseModel):
             A list of image names
         """
         images = self.get_images()
-        return [img.get("name", "unknown.png") for img in images if "name" in img]
+        return [img.name for img_list in images for img in img_list]
 
     def get_pages(self) -> List[Page]:
         """
@@ -174,6 +171,15 @@ class ParseResult(BaseModel):
                     chart_dict["page"] = page.page
                     charts.append(chart_dict)
         return charts
+
+    def get_layout(self) -> List[List[LayoutItem]]:
+        """
+        Get the layout of the document.
+
+        Returns:
+            A list of layout items
+        """
+        return [page.layout for page in self._job_result.pages]
 
     def get_page_count(self) -> int:
         """
