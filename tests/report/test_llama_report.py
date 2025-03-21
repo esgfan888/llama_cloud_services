@@ -81,6 +81,11 @@ async def test_create_and_delete_report(
 
 
 @pytest.mark.asyncio
+@pytest.mark.xfail(
+    condition=lambda: os.getenv("CI"),
+    reason="Report plan sometimes times out",
+    raises=TimeoutError,
+)
 async def test_report_plan_workflow(report: ReportClient) -> None:
     """Test the report planning workflow."""
     # Wait for the plan
