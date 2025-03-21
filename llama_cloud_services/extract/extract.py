@@ -78,14 +78,28 @@ class ExtractionAgent:
 
         def run_coro() -> T:
             async def wrapped_coro() -> T:
+                # Get the original client to preserve its configuration
+                original_client = self._client._client_wrapper.httpx_client
+
+                # Create a new client with the same configuration as the original
                 async with httpx.AsyncClient(
-                    timeout=self._client._client_wrapper.httpx_client.timeout,
+                    timeout=original_client.timeout,
+                    trust_env=original_client.trust_env,
+                    base_url=original_client.base_url,
+                    follow_redirects=original_client.follow_redirects,
+                    transport=original_client._transport,
+                    default_encoding=original_client._default_encoding,
                 ) as client:
-                    original_client = self._client._client_wrapper.httpx_client
+                    # Copy headers and cookies
+                    client.headers = original_client.headers.copy()
+                    client.cookies = httpx.Cookies(original_client.cookies)
+
+                    # Temporarily replace the client
                     self._client._client_wrapper.httpx_client = client
                     try:
                         return await coro
                     finally:
+                        # Restore the original client
                         self._client._client_wrapper.httpx_client = original_client
 
             return asyncio.run(wrapped_coro())
@@ -436,6 +450,13 @@ class LlamaExtract(BaseComponent):
     verbose: bool = Field(
         default=False, description="Show verbose output when extracting files."
     )
+    verify: Union[bool, str] = Field(
+        default=True, description="Simple SSL verification option."
+    )
+    httpx_timeout: Optional[float] = Field(
+        default=60, description="Timeout for the httpx client."
+    )
+    _httpx_client: Optional[httpx.AsyncClient] = PrivateAttr()
     _async_client: AsyncLlamaCloud = PrivateAttr()
     _thread_pool: ThreadPoolExecutor = PrivateAttr()
     _project_id: Optional[str] = PrivateAttr()
@@ -452,6 +473,9 @@ class LlamaExtract(BaseComponent):
         project_id: Optional[str] = None,
         organization_id: Optional[str] = None,
         verbose: bool = False,
+        verify: Union[bool, str] = True,
+        httpx_timeout: Optional[float] = 60,
+        httpx_client: Optional[httpx.AsyncClient] = None,
     ):
         if not api_key:
             api_key = os.getenv("LLAMA_CLOUD_API_KEY", None)
@@ -470,9 +494,24 @@ class LlamaExtract(BaseComponent):
             show_progress=show_progress,
             verbose=verbose,
         )
+        if httpx_client is not None:
+            if not verify:
+                warnings.warn(
+                    "Both 'httpx_client' and 'verify=False' were provided. "
+                    "The custom httpx_client takes precedence and 'verify' will be ignored."
+                )
+            self._httpx_client = httpx_client
+        else:
+            self._httpx_client = httpx.AsyncClient(verify=verify, timeout=httpx_timeout)
+
+        assert self._httpx_client is not None, "httpx_client should be initialized"
+        self.verify = verify
+        self.httpx_timeout = httpx_timeout
 
         self._async_client = AsyncLlamaCloud(
-            token=self.api_key, base_url=self.base_url, timeout=None
+            token=self.api_key,
+            base_url=self.base_url,
+            httpx_client=self._httpx_client,
         )
         self._thread_pool = ThreadPoolExecutor(
             max_workers=min(10, (os.cpu_count() or 1) + 4)
@@ -501,17 +540,30 @@ class LlamaExtract(BaseComponent):
         def run_coro() -> T:
             # Create a new client for this thread
             async def wrapped_coro() -> T:
+                assert (
+                    self._httpx_client is not None
+                ), "httpx_client should be initialized"
+                # Create a new client with the same configuration as the original
                 async with httpx.AsyncClient(
-                    timeout=self._async_client._client_wrapper.httpx_client.timeout,
+                    timeout=self.httpx_timeout,
+                    trust_env=self._httpx_client.trust_env,
+                    base_url=self._httpx_client.base_url,
+                    follow_redirects=self._httpx_client.follow_redirects,
+                    transport=self._httpx_client._transport,
+                    default_encoding=self._httpx_client._default_encoding,
                 ) as client:
-                    # Replace the client in the coro's context
-                    original_client = self._async_client._client_wrapper.httpx_client
+                    # Copy headers and cookies
+                    client.headers = self._httpx_client.headers.copy()
+                    client.cookies = httpx.Cookies(self._httpx_client.cookies)
+
+                    # Temporarily replace the client
                     self._async_client._client_wrapper.httpx_client = client
                     try:
                         return await coro
                     finally:
+                        # Restore the original client
                         self._async_client._client_wrapper.httpx_client = (
-                            original_client
+                            self._httpx_client
                         )
 
             return asyncio.run(wrapped_coro())
