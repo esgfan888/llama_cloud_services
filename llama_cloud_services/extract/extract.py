@@ -504,7 +504,6 @@ class LlamaExtract(BaseComponent):
         else:
             self._httpx_client = httpx.AsyncClient(verify=verify, timeout=httpx_timeout)
 
-        assert self._httpx_client is not None, "httpx_client should be initialized"
         self.verify = verify
         self.httpx_timeout = httpx_timeout
 
