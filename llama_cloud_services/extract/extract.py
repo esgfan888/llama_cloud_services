@@ -446,7 +446,9 @@ class LlamaExtract(BaseComponent):
     verbose: bool = Field(
         default=False, description="Show verbose output when extracting files."
     )
-    verify: bool = Field(default=True, description="Simple SSL verification option.")
+    verify: Optional[bool] = Field(
+        default=True, description="Simple SSL verification option."
+    )
     httpx_timeout: Optional[float] = Field(
         default=60, description="Timeout for the httpx client."
     )
@@ -465,7 +467,7 @@ class LlamaExtract(BaseComponent):
         show_progress: bool = True,
         project_id: Optional[str] = None,
         organization_id: Optional[str] = None,
-        verify: bool = True,
+        verify: Optional[bool] = True,
         httpx_timeout: Optional[float] = 60,
         verbose: bool = False,
     ):
