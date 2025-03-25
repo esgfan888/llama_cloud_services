@@ -276,13 +276,17 @@ class LlamaParse(BasePydanticReader):
         default=None,
         description="A templated suffix to add to the beginning of each page. If it contain `{page_number}`, it will be replaced by the page number.",
     )
-    parsing_mode: Optional[str] = Field(
+    parse_mode: Optional[str] = Field(
         default=None,
         description="The parsing mode to use, see ParsingMode enum for possible values ",
     )
     premium_mode: Optional[bool] = Field(
         default=False,
         description="Use our best parser mode if set to True.",
+    )
+    preserve_layout_alignment_across_pages: Optional[bool] = Field(
+        default=False,
+        description="Preserve grid alignment across page in text mode.",
     )
     skip_diagonal_text: Optional[bool] = Field(
         default=False,
@@ -706,8 +710,14 @@ class LlamaParse(BasePydanticReader):
             )
             data["parsing_instruction"] = self.parsing_instruction
 
+        if self.parse_mode:
+            data["parse_mode"] = self.parse_mode
+        
         if self.premium_mode:
             data["premium_mode"] = self.premium_mode
+      
+        if self.preserve_layout_alignment_across_pages:
+            data["preserve_layout_alignment_across_pages"] = self.preserve_layout_alignment_across_pages
 
         if self.skip_diagonal_text:
             data["skip_diagonal_text"] = self.skip_diagonal_text
