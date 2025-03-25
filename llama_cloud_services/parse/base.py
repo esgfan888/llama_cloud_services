@@ -712,12 +712,14 @@ class LlamaParse(BasePydanticReader):
 
         if self.parse_mode:
             data["parse_mode"] = self.parse_mode
-        
+
         if self.premium_mode:
             data["premium_mode"] = self.premium_mode
-      
+
         if self.preserve_layout_alignment_across_pages:
-            data["preserve_layout_alignment_across_pages"] = self.preserve_layout_alignment_across_pages
+            data[
+                "preserve_layout_alignment_across_pages"
+            ] = self.preserve_layout_alignment_across_pages
 
         if self.skip_diagonal_text:
             data["skip_diagonal_text"] = self.skip_diagonal_text
