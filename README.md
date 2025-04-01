@@ -39,7 +39,7 @@ See the quickstart guides for each service for more information:
 - [LlamaExtract (beta/invite-only)](./extract.md)
 
 
-## EU SaaS
+## Switch to EU SaaS 🇪🇺
 
 If you are interested in using LlamaCloud services in the EU, you can adjust your base URL to `https://api.cloud.eu.llamaindex.ai`.
 
