@@ -208,7 +208,7 @@ class ExtractionAgent:
             )
         )
 
-    async def _queue_extraction_test(
+    async def _run_extraction_test(
         self,
         files: Union[FileInput, List[FileInput]],
         extract_settings: LlamaExtractSettings,
@@ -242,7 +242,7 @@ class ExtractionAgent:
 
         job_tasks = [run_job(file) for file in uploaded_files]
         with augment_async_errors():
-            extract_jobs = await run_jobs(
+            extract_results = await run_jobs(
                 job_tasks,
                 workers=self.num_workers,
                 desc="Running extraction jobs",
@@ -250,15 +250,13 @@ class ExtractionAgent:
             )
 
         if self._verbose:
-            for file, job in zip(files, extract_jobs):
+            for file, job in zip(files, extract_results):
                 file_repr = (
                     str(file) if isinstance(file, (str, Path)) else "<bytes/buffer>"
                 )
-                print(
-                    f"Queued file extraction for file {file_repr} under job_id {job.id}"
-                )
+                print(f"Running extraction for file {file_repr} under job_id {job.id}")
 
-        return extract_jobs[0] if single_file else extract_jobs
+        return extract_results[0] if single_file else extract_results
 
     async def queue_extraction(
         self,
