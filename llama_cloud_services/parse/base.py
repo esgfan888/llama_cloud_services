@@ -185,7 +185,10 @@ class LlamaParse(BasePydanticReader):
         default=None,
         description="The top margin of the bounding box to use to extract text from documents expressed as a float between 0 and 1 representing the percentage of the page height.",
     )
-
+    compact_markdown_table: Optional[bool] = Field(
+        default=False,
+        description="If set to true, the parser will output compact markdown table (without trailing spaces in cells).",
+    )
     continuous_mode: Optional[bool] = Field(
         default=False,
         description="Parse documents continuously, leading to better results on documents where tables span across two pages.",
@@ -598,6 +601,9 @@ class LlamaParse(BasePydanticReader):
 
         if self.bbox_top is not None:
             data["bbox_top"] = self.bbox_top
+
+        if self.compact_markdown_table:
+            data["compact_markdown_table"] = self.compact_markdown_table
 
         if self.complemental_formatting_instruction:
             print(
