@@ -34,6 +34,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 T = TypeVar("T")
 
+
 SchemaInput = Union[JSONObjectType, Type[BaseModel]]
 
 DEFAULT_EXTRACT_CONFIG = ExtractConfig(
@@ -61,7 +62,7 @@ class SourceText:
                 )
 
 
-FileInput = Union[str, Path, BufferedIOBase] | SourceText
+FileInput = Union[str, Path, BufferedIOBase, SourceText]
 
 
 class ExtractionAgent:
