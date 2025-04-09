@@ -43,6 +43,59 @@ DEFAULT_EXTRACT_CONFIG = ExtractConfig(
 )
 
 
+def run_in_thread(
+    coro: Coroutine[Any, Any, T],
+    thread_pool: ThreadPoolExecutor,
+    verify: bool,
+    httpx_timeout: float,
+    client_wrapper: Any,
+) -> T:
+    """Run coroutine in a thread with proper client management."""
+
+    async def wrapped_coro() -> T:
+        client = httpx.AsyncClient(
+            verify=verify,
+            timeout=httpx_timeout,
+            limits=httpx.Limits(max_keepalive_connections=100, max_connections=100),
+        )
+        original_client = client_wrapper.httpx_client
+        try:
+            client_wrapper.httpx_client = client
+            return await coro
+        finally:
+            client_wrapper.httpx_client = original_client
+            await client.aclose()
+
+    def run_coro() -> T:
+        try:
+            return asyncio.run(wrapped_coro())
+        except httpx.TimeoutException as e:
+            raise TimeoutError(f"Request timed out: {str(e)}") from e
+        except httpx.NetworkError as e:
+            raise ConnectionError(f"Network error: {str(e)}") from e
+
+    return thread_pool.submit(run_coro).result()
+
+
+class SourceText:
+    def __init__(
+        self, file: bytes | BufferedIOBase | str | Path, filename: Optional[str] = None
+    ):
+        self.file = file
+        self.filename = filename
+        self._validate()
+
+    def _validate(self) -> None:
+        """Ensure filename is provided when needed."""
+        if isinstance(self.file, (bytes, BufferedIOBase)):
+            if not self.filename and hasattr(self.file, "name"):
+                self.filename = os.path.basename(str(self.file.name))
+            elif not hasattr(self.file, "name") and self.filename is None:
+                raise ValueError(
+                    "filename must be provided when file is bytes or a file-like object without a name"
+                )
+
+
 class ExtractionAgent:
     """Class representing a single extraction agent with methods for extraction operations."""
 
@@ -76,31 +129,6 @@ class ExtractionAgent:
         self._thread_pool = ThreadPoolExecutor(
             max_workers=min(10, (os.cpu_count() or 1) + 4)
         )
-
-    def _run_in_thread(self, coro: Coroutine[Any, Any, T]) -> T:
-        """Run coroutine in a separate thread to avoid event loop issues"""
-
-        def run_coro() -> T:
-            async def wrapped_coro() -> T:
-                # Get the original client to preserve its configuration
-                original_client = self._client._client_wrapper.httpx_client
-
-                # Create a new client with the same configuration as the original
-                async with httpx.AsyncClient(
-                    verify=self.verify,
-                    timeout=self.httpx_timeout,
-                ) as client:
-                    # Temporarily replace the client
-                    self._client._client_wrapper.httpx_client = client
-                    try:
-                        return await coro
-                    finally:
-                        # Restore the original client
-                        self._client._client_wrapper.httpx_client = original_client
-
-            return asyncio.run(wrapped_coro())
-
-        return self._thread_pool.submit(run_coro).result()
 
     @property
     def id(self) -> str:
@@ -140,6 +168,16 @@ class ExtractionAgent:
     @config.setter
     def config(self, config: ExtractConfig) -> None:
         self._config = config
+
+    def _run_in_thread(self, coro: Coroutine[Any, Any, T]) -> T:
+        """Run coroutine in a separate thread to avoid event loop issues"""
+        return run_in_thread(
+            coro,
+            self._thread_pool,
+            self.verify,  # type: ignore
+            self.httpx_timeout,  # type: ignore
+            self._client._client_wrapper,
+        )
 
     async def _upload_file(self, file_input: FileInput) -> File:
         """Upload a file for extraction."""
@@ -420,6 +458,14 @@ class ExtractionAgent:
     def __repr__(self) -> str:
         return f"ExtractionAgent(id={self.id}, name={self.name})"
 
+    def __del__(self) -> None:
+        """Cleanup resources properly."""
+        try:
+            if hasattr(self, "_thread_pool"):
+                self._thread_pool.shutdown(wait=True)
+        except Exception:
+            pass  # Suppress exceptions during cleanup
+
 
 class LlamaExtract(BaseComponent):
     """Factory class for creating and managing extraction agents."""
@@ -522,31 +568,13 @@ class LlamaExtract(BaseComponent):
 
     def _run_in_thread(self, coro: Coroutine[Any, Any, T]) -> T:
         """Run coroutine in a separate thread to avoid event loop issues"""
-
-        def run_coro() -> T:
-            # Create a new client for this thread
-            async def wrapped_coro() -> T:
-                assert (
-                    self._httpx_client is not None
-                ), "httpx_client should be initialized"
-                # Create a new client with the same configuration as the original
-                async with httpx.AsyncClient(
-                    verify=self.verify,
-                    timeout=self.httpx_timeout,
-                ) as client:
-                    # Temporarily replace the client
-                    self._async_client._client_wrapper.httpx_client = client
-                    try:
-                        return await coro
-                    finally:
-                        # Restore the original client
-                        self._async_client._client_wrapper.httpx_client = (
-                            self._httpx_client
-                        )
-
-            return asyncio.run(wrapped_coro())
-
-        return self._thread_pool.submit(run_coro).result()
+        return run_in_thread(
+            coro,
+            self._thread_pool,
+            self.verify,  # type: ignore
+            self.httpx_timeout,  # type: ignore
+            self._async_client._client_wrapper,
+        )
 
     def create_agent(
         self,
@@ -690,6 +718,14 @@ class LlamaExtract(BaseComponent):
                 extraction_agent_id=agent_id
             )
         )
+
+    def __del__(self) -> None:
+        """Cleanup resources properly."""
+        try:
+            if hasattr(self, "_thread_pool"):
+                self._thread_pool.shutdown(wait=True)
+        except Exception:
+            pass  # Suppress exceptions during cleanup
 
 
 if __name__ == "__main__":
