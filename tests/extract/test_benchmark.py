@@ -133,7 +133,7 @@ async def test_extraction(
     test_case: TestCase, extraction_agent: ExtractionAgent
 ) -> None:
     start = perf_counter()
-    result = await extraction_agent._queue_extraction_test(
+    result = await extraction_agent._run_extraction_test(
         test_case.input_file,
         extract_settings=LlamaExtractSettings(
             llama_parse_params=LlamaParseParameters(

@@ -1,3 +1,7 @@
-from llama_cloud_services.extract.extract import LlamaExtract, ExtractionAgent
+from llama_cloud_services.extract.extract import (
+    LlamaExtract,
+    ExtractionAgent,
+    SourceText,
+)
 
-__all__ = ["LlamaExtract", "ExtractionAgent"]
+__all__ = ["LlamaExtract", "ExtractionAgent", "SourceText"]
