@@ -45,7 +45,9 @@ DEFAULT_EXTRACT_CONFIG = ExtractConfig(
 
 class SourceText:
     def __init__(
-        self, file: bytes | BufferedIOBase | str | Path, filename: Optional[str] = None
+        self,
+        file: Union[bytes, BufferedIOBase, str, Path],
+        filename: Optional[str] = None,
     ):
         self.file = file
         self.filename = filename
@@ -174,7 +176,7 @@ class ExtractionAgent:
                        without a name attribute.
         """
         try:
-            file_contents: BufferedIOBase | BytesIO
+            file_contents: Union[BufferedIOBase, BytesIO]
             if isinstance(file_input.file, (str, Path)):
                 file_contents = open(file_input.file, "rb")
             elif isinstance(file_input.file, bytes):
