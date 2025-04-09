@@ -38,6 +38,25 @@ See the quickstart guides for each service for more information:
 - [LlamaReport (beta/invite-only)](./report.md)
 - [LlamaExtract (beta/invite-only)](./extract.md)
 
+## Switch to EU SaaS 🇪🇺
+
+If you are interested in using LlamaCloud services in the EU, you can adjust your base URL to `https://api.cloud.eu.llamaindex.ai`.
+
+You can also create your API key in the EU region [here](https://cloud.eu.llamaindex.ai).
+
+```python
+from llama_cloud_services import (
+    LlamaParse,
+    LlamaReport,
+    LlamaExtract,
+    EU_BASE_URL,
+)
+
+parser = LlamaParse(api_key="YOUR_API_KEY", base_url=EU_BASE_URL)
+report = LlamaReport(api_key="YOUR_API_KEY", base_url=EU_BASE_URL)
+extract = LlamaExtract(api_key="YOUR_API_KEY", base_url=EU_BASE_URL)
+```
+
 ## Documentation
 
 You can see complete SDK and API documentation for each service on [our official docs](https://docs.cloud.llamaindex.ai/).

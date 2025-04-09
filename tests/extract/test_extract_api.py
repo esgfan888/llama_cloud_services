@@ -182,7 +182,14 @@ class TestExtractionAgent:
         assert "new_field" in updated_agent.data_schema["properties"]
 
     def test_list_extraction_runs(self, test_agent: ExtractionAgent):
-        assert len(test_agent.list_extraction_runs()) == 0
+        assert test_agent.list_extraction_runs().total == 0
         test_agent.extract(TEST_PDF)
         runs = test_agent.list_extraction_runs()
-        assert len(runs) > 0
+        assert runs.total > 0
+
+    def test_delete_extraction_run(self, test_agent: ExtractionAgent):
+        assert test_agent.list_extraction_runs().total == 0
+        run = test_agent.extract(TEST_PDF)
+        test_agent.delete_extraction_run(run.id)
+        runs = test_agent.list_extraction_runs()
+        assert runs.total == 0

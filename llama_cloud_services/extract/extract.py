@@ -22,6 +22,7 @@ from llama_cloud import (
     Project,
     ExtractTarget,
     LlamaExtractSettings,
+    PaginatedExtractRunsResponse,
 )
 from llama_cloud.client import AsyncLlamaCloud
 from llama_cloud_services.extract.utils import JSONObjectType, augment_async_errors
@@ -38,7 +39,7 @@ SchemaInput = Union[JSONObjectType, Type[BaseModel]]
 
 DEFAULT_EXTRACT_CONFIG = ExtractConfig(
     extraction_target=ExtractTarget.PER_DOC,
-    extraction_mode=ExtractMode.ACCURATE,
+    extraction_mode=ExtractMode.BALANCED,
 )
 
 
@@ -56,6 +57,8 @@ class ExtractionAgent:
         num_workers: int = 4,
         show_progress: bool = True,
         verbose: bool = False,
+        verify: Optional[bool] = True,
+        httpx_timeout: Optional[float] = 60,
     ):
         self._client = client
         self._agent = agent
@@ -65,6 +68,8 @@ class ExtractionAgent:
         self.max_timeout = max_timeout
         self.num_workers = num_workers
         self.show_progress = show_progress
+        self.verify = verify
+        self.httpx_timeout = httpx_timeout
         self._verbose = verbose
         self._data_schema: Union[JSONObjectType, None] = None
         self._config: Union[ExtractConfig, None] = None
@@ -77,14 +82,20 @@ class ExtractionAgent:
 
         def run_coro() -> T:
             async def wrapped_coro() -> T:
+                # Get the original client to preserve its configuration
+                original_client = self._client._client_wrapper.httpx_client
+
+                # Create a new client with the same configuration as the original
                 async with httpx.AsyncClient(
-                    timeout=self._client._client_wrapper.httpx_client.timeout,
+                    verify=self.verify,
+                    timeout=self.httpx_timeout,
                 ) as client:
-                    original_client = self._client._client_wrapper.httpx_client
+                    # Temporarily replace the client
                     self._client._client_wrapper.httpx_client = client
                     try:
                         return await coro
                     finally:
+                        # Restore the original client
                         self._client._client_wrapper.httpx_client = original_client
 
             return asyncio.run(wrapped_coro())
@@ -197,7 +208,7 @@ class ExtractionAgent:
             )
         )
 
-    async def _queue_extraction_test(
+    async def _run_extraction_test(
         self,
         files: Union[FileInput, List[FileInput]],
         extract_settings: LlamaExtractSettings,
@@ -231,7 +242,7 @@ class ExtractionAgent:
 
         job_tasks = [run_job(file) for file in uploaded_files]
         with augment_async_errors():
-            extract_jobs = await run_jobs(
+            extract_results = await run_jobs(
                 job_tasks,
                 workers=self.num_workers,
                 desc="Running extraction jobs",
@@ -239,15 +250,13 @@ class ExtractionAgent:
             )
 
         if self._verbose:
-            for file, job in zip(files, extract_jobs):
+            for file, job in zip(files, extract_results):
                 file_repr = (
                     str(file) if isinstance(file, (str, Path)) else "<bytes/buffer>"
                 )
-                print(
-                    f"Queued file extraction for file {file_repr} under job_id {job.id}"
-                )
+                print(f"Running extraction for file {file_repr} under job_id {job.id}")
 
-        return extract_jobs[0] if single_file else extract_jobs
+        return extract_results[0] if single_file else extract_results
 
     async def queue_extraction(
         self,
@@ -380,15 +389,29 @@ class ExtractionAgent:
             )
         )
 
-    def list_extraction_runs(self) -> List[ExtractRun]:
+    def delete_extraction_run(self, run_id: str) -> None:
+        """Delete an extraction run by ID.
+
+        Args:
+            run_id (str): The ID of the extraction run to delete
+        """
+        self._run_in_thread(
+            self._client.llama_extract.delete_extraction_run(run_id=run_id)
+        )
+
+    def list_extraction_runs(
+        self, page: int = 0, limit: int = 100
+    ) -> PaginatedExtractRunsResponse:
         """List extraction runs for the extraction agent.
 
         Returns:
-            List[ExtractRun]: List of extraction runs
+            PaginatedExtractRunsResponse: Paginated list of extraction runs
         """
         return self._run_in_thread(
             self._client.llama_extract.list_extract_runs(
                 extraction_agent_id=self.id,
+                skip=page * limit,
+                limit=limit,
             )
         )
 
@@ -421,6 +444,12 @@ class LlamaExtract(BaseComponent):
     verbose: bool = Field(
         default=False, description="Show verbose output when extracting files."
     )
+    verify: Optional[bool] = Field(
+        default=True, description="Simple SSL verification option."
+    )
+    httpx_timeout: Optional[float] = Field(
+        default=60, description="Timeout for the httpx client."
+    )
     _async_client: AsyncLlamaCloud = PrivateAttr()
     _thread_pool: ThreadPoolExecutor = PrivateAttr()
     _project_id: Optional[str] = PrivateAttr()
@@ -436,6 +465,8 @@ class LlamaExtract(BaseComponent):
         show_progress: bool = True,
         project_id: Optional[str] = None,
         organization_id: Optional[str] = None,
+        verify: Optional[bool] = True,
+        httpx_timeout: Optional[float] = 60,
         verbose: bool = False,
     ):
         if not api_key:
@@ -453,11 +484,18 @@ class LlamaExtract(BaseComponent):
             max_timeout=max_timeout,
             num_workers=num_workers,
             show_progress=show_progress,
+            verify=verify,
+            httpx_timeout=httpx_timeout,
             verbose=verbose,
         )
+        self._httpx_client = httpx.AsyncClient(verify=verify, timeout=httpx_timeout)
+        self.verify = verify
+        self.httpx_timeout = httpx_timeout
 
         self._async_client = AsyncLlamaCloud(
-            token=self.api_key, base_url=self.base_url, timeout=None
+            token=self.api_key,
+            base_url=self.base_url,
+            httpx_client=self._httpx_client,
         )
         self._thread_pool = ThreadPoolExecutor(
             max_workers=min(10, (os.cpu_count() or 1) + 4)
@@ -486,17 +524,22 @@ class LlamaExtract(BaseComponent):
         def run_coro() -> T:
             # Create a new client for this thread
             async def wrapped_coro() -> T:
+                assert (
+                    self._httpx_client is not None
+                ), "httpx_client should be initialized"
+                # Create a new client with the same configuration as the original
                 async with httpx.AsyncClient(
-                    timeout=self._async_client._client_wrapper.httpx_client.timeout,
+                    verify=self.verify,
+                    timeout=self.httpx_timeout,
                 ) as client:
-                    # Replace the client in the coro's context
-                    original_client = self._async_client._client_wrapper.httpx_client
+                    # Temporarily replace the client
                     self._async_client._client_wrapper.httpx_client = client
                     try:
                         return await coro
                     finally:
+                        # Restore the original client
                         self._async_client._client_wrapper.httpx_client = (
-                            original_client
+                            self._httpx_client
                         )
 
             return asyncio.run(wrapped_coro())
@@ -519,6 +562,14 @@ class LlamaExtract(BaseComponent):
         Returns:
             ExtractionAgent: The created extraction agent
         """
+        if config is not None:
+            if config.extraction_mode == ExtractMode.ACCURATE:
+                warnings.warn(
+                    "ACCURATE extraction mode is deprecated. Using BALANCED instead."
+                )
+                config.extraction_mode = ExtractMode.BALANCED
+        else:
+            config = DEFAULT_EXTRACT_CONFIG
 
         if isinstance(data_schema, dict):
             data_schema = data_schema
@@ -536,7 +587,7 @@ class LlamaExtract(BaseComponent):
                 request=ExtractAgentCreate(
                     name=name,
                     data_schema=data_schema,
-                    config=config or DEFAULT_EXTRACT_CONFIG,
+                    config=config,
                 ),
             )
         )
@@ -599,6 +650,8 @@ class LlamaExtract(BaseComponent):
             num_workers=self.num_workers,
             show_progress=self.show_progress,
             verbose=self.verbose,
+            verify=self.verify,
+            httpx_timeout=self.httpx_timeout,
         )
 
     def list_agents(self) -> List[ExtractionAgent]:
