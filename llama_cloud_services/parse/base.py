@@ -19,7 +19,7 @@ from llama_index.core.readers.base import BasePydanticReader
 from llama_index.core.readers.file.base import get_default_fs
 from llama_index.core.schema import Document
 
-from llama_cloud_services.parse.result import ParseResult
+from llama_cloud_services.parse.types import JobResult
 from llama_cloud_services.parse.utils import (
     SUPPORTED_FILE_TYPES,
     ResultType,
@@ -993,11 +993,11 @@ class LlamaParse(BasePydanticReader):
         file_path: Union[List[FileInput], FileInput],
         extra_info: Optional[dict] = None,
         fs: Optional[AbstractFileSystem] = None,
-    ) -> Union[List["ParseResult"], "ParseResult"]:
+    ) -> Union[List["JobResult"], "JobResult"]:
         """
-        Parse the file and return a ParseResult object instead of Document objects.
+        Parse the file and return a JobResult object instead of Document objects.
 
-        This method is similar to aload_data but returns ParseResult objects that provide
+        This method is similar to aload_data but returns JobResult objects that provide
         direct access to the various output formats (text, markdown, json, etc.)
 
         Args:
@@ -1006,7 +1006,7 @@ class LlamaParse(BasePydanticReader):
             fs: Optional filesystem to use for reading files.
 
         Returns:
-            ParseResult object or list of ParseResult objects if multiple files were provided
+            JobResult object or list of JobResult objects if multiple files were provided
         """
 
         if isinstance(file_path, (str, PurePosixPath, Path, bytes, BufferedIOBase)):
@@ -1014,7 +1014,6 @@ class LlamaParse(BasePydanticReader):
             if self.verbose:
                 print("Started parsing the file under job_id %s" % job_id)
 
-            # Create ParseResult with just job_id initially
             if isinstance(file_path, (bytes, BufferedIOBase)):
                 if not extra_info or "file_name" not in extra_info:
                     raise ValueError(
@@ -1027,16 +1026,15 @@ class LlamaParse(BasePydanticReader):
             job_result = await self._get_job_result(
                 job_id, ResultType.JSON.value, verbose=self.verbose
             )
-            parse_result = ParseResult(
+            return JobResult(
                 job_id=job_id,
                 file_name=file_name,
                 job_result=job_result,
                 api_key=self.api_key,
                 base_url=self.base_url,
                 client=self.aclient,
+                page_separator=self.page_separator or _DEFAULT_SEPARATOR,
             )
-
-            return parse_result
 
         elif isinstance(file_path, list):
             jobs = [
@@ -1078,20 +1076,21 @@ class LlamaParse(BasePydanticReader):
                     show_progress=self.show_progress,
                 )
 
-                # Create ParseResults just with job_ids initially
-                parse_results = [
-                    ParseResult(
+                # Create JobResults just using the job_ids and job_results
+                job_results = [
+                    JobResult(
                         job_id=job_id,
                         file_name=file_names[i],
                         job_result=job_results[i],
                         api_key=self.api_key,
                         base_url=self.base_url,
                         client=self.aclient,
+                        page_separator=self.page_separator or _DEFAULT_SEPARATOR,
                     )
                     for i, job_id in enumerate(job_ids)
                 ]
 
-                return parse_results
+                return job_results
 
             except RuntimeError as e:
                 if nest_asyncio_err in str(e):
@@ -1108,11 +1107,11 @@ class LlamaParse(BasePydanticReader):
         file_path: Union[List[FileInput], FileInput],
         extra_info: Optional[dict] = None,
         fs: Optional[AbstractFileSystem] = None,
-    ) -> Union[List["ParseResult"], "ParseResult"]:
+    ) -> Union[List["JobResult"], "JobResult"]:
         """
-        Parse the file and return a ParseResult object instead of Document objects.
+        Parse the file and return a JobResult object instead of Document objects.
 
-        This method is similar to load_data but returns ParseResult objects that provide
+        This method is similar to load_data but returns JobResult objects that provide
         direct access to the various output formats (text, markdown, json, etc.)
 
         Args:
@@ -1121,7 +1120,7 @@ class LlamaParse(BasePydanticReader):
             fs: Optional filesystem to use for reading files.
 
         Returns:
-            ParseResult object or list of ParseResult objects if multiple files were provided
+            JobResult object or list of JobResult objects if multiple files were provided
         """
         try:
             return asyncio_run(self.aparse(file_path, extra_info, fs=fs))
