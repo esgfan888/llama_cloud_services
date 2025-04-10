@@ -1,7 +1,7 @@
 import asyncio
 import os
 import time
-from io import BufferedIOBase, BufferedReader, BytesIO
+from io import BufferedIOBase, BufferedReader, BytesIO, TextIOWrapper, StringIO
 from pathlib import Path
 from typing import List, Optional, Type, Union, Coroutine, Any, TypeVar
 import warnings
@@ -46,22 +46,37 @@ DEFAULT_EXTRACT_CONFIG = ExtractConfig(
 class SourceText:
     def __init__(
         self,
-        file: Union[bytes, BufferedIOBase, str, Path],
+        *,
+        file: Union[bytes, BufferedIOBase, TextIOWrapper, str, Path, None] = None,
+        text_content: Optional[str] = None,
         filename: Optional[str] = None,
     ):
         self.file = file
         self.filename = filename
+        self.text_content = text_content
         self._validate()
 
     def _validate(self) -> None:
         """Ensure filename is provided when needed."""
-        if isinstance(self.file, (bytes, BufferedIOBase)):
+        if not ((self.file is None) ^ (self.text_content is None)):
+            raise ValueError("Either file or text_content must be provided.")
+        if self.text_content is not None:
+            if not self.filename:
+                self.filename = "text_input.txt"
+            return
+
+        if isinstance(self.file, (bytes, BufferedIOBase, TextIOWrapper)):
             if not self.filename and hasattr(self.file, "name"):
                 self.filename = os.path.basename(str(self.file.name))
             elif not hasattr(self.file, "name") and self.filename is None:
                 raise ValueError(
                     "filename must be provided when file is bytes or a file-like object without a name"
                 )
+        elif isinstance(self.file, (str, Path)):
+            if not self.filename:
+                self.filename = os.path.basename(str(self.file))
+        else:
+            raise ValueError(f"Unsupported file type: {type(self.file)}")
 
 
 FileInput = Union[str, Path, BufferedIOBase, SourceText]
@@ -196,12 +211,25 @@ class ExtractionAgent:
         """
         try:
             file_contents: Union[BufferedIOBase, BytesIO]
-            if isinstance(file_input.file, (str, Path)):
+
+            if file_input.text_content is not None:
+                # Handle direct text content
+                file_contents = BytesIO(file_input.text_content.encode("utf-8"))
+            elif isinstance(file_input.file, (TextIOWrapper, StringIO)):
+                # Handle text-based IO objects
+                file_contents = BytesIO(file_input.file.read().encode("utf-8"))
+            elif isinstance(file_input.file, (str, Path)):
+                # Handle file paths
                 file_contents = open(file_input.file, "rb")
             elif isinstance(file_input.file, bytes):
+                # Handle bytes
                 file_contents = BytesIO(file_input.file)
-            else:
+            elif isinstance(file_input.file, BufferedIOBase):
+                # Handle binary IO objects
                 file_contents = file_input.file
+            else:
+                raise ValueError(f"Unsupported file type: {type(file_input.file)}")
+
             # Add name attribute to file object if needed
             if not hasattr(file_contents, "name"):
                 file_contents.name = file_input.filename  # type: ignore
