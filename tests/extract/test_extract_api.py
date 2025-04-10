@@ -3,7 +3,7 @@ import pytest
 from pathlib import Path
 from pydantic import BaseModel
 
-from llama_cloud_services.extract import LlamaExtract, ExtractionAgent
+from llama_cloud_services.extract import LlamaExtract, ExtractionAgent, SourceText
 from tests.extract.util import load_test_dotenv
 
 load_test_dotenv()
@@ -144,6 +144,16 @@ class TestExtractionAgent:
 
     def test_sync_extract_single_file(self, test_agent):
         result = test_agent.extract(TEST_PDF)
+        assert result.status == "SUCCESS"
+        assert result.data is not None
+        assert isinstance(result.data, dict)
+        assert "title" in result.data
+        assert "summary" in result.data
+
+    def test_extract_file_from_bytes(self, test_agent):
+        with open(TEST_PDF, "rb") as f:
+            file_bytes = f.read()
+        result = test_agent.extract(SourceText(file=file_bytes, filename=TEST_PDF.name))
         assert result.status == "SUCCESS"
         assert result.data is not None
         assert isinstance(result.data, dict)

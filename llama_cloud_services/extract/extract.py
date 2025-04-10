@@ -34,13 +34,71 @@ from concurrent.futures import ThreadPoolExecutor
 
 T = TypeVar("T")
 
-FileInput = Union[str, Path, bytes, BufferedIOBase]
+
 SchemaInput = Union[JSONObjectType, Type[BaseModel]]
 
 DEFAULT_EXTRACT_CONFIG = ExtractConfig(
     extraction_target=ExtractTarget.PER_DOC,
     extraction_mode=ExtractMode.BALANCED,
 )
+
+
+class SourceText:
+    def __init__(
+        self,
+        file: Union[bytes, BufferedIOBase, str, Path],
+        filename: Optional[str] = None,
+    ):
+        self.file = file
+        self.filename = filename
+        self._validate()
+
+    def _validate(self) -> None:
+        """Ensure filename is provided when needed."""
+        if isinstance(self.file, (bytes, BufferedIOBase)):
+            if not self.filename and hasattr(self.file, "name"):
+                self.filename = os.path.basename(str(self.file.name))
+            elif not hasattr(self.file, "name") and self.filename is None:
+                raise ValueError(
+                    "filename must be provided when file is bytes or a file-like object without a name"
+                )
+
+
+FileInput = Union[str, Path, BufferedIOBase, SourceText]
+
+
+def run_in_thread(
+    coro: Coroutine[Any, Any, T],
+    thread_pool: ThreadPoolExecutor,
+    verify: bool,
+    httpx_timeout: float,
+    client_wrapper: Any,
+) -> T:
+    """Run coroutine in a thread with proper client management."""
+
+    async def wrapped_coro() -> T:
+        client = httpx.AsyncClient(
+            verify=verify,
+            timeout=httpx_timeout,
+            limits=httpx.Limits(max_keepalive_connections=100, max_connections=100),
+        )
+        original_client = client_wrapper.httpx_client
+        try:
+            client_wrapper.httpx_client = client
+            return await coro
+        finally:
+            client_wrapper.httpx_client = original_client
+            await client.aclose()
+
+    def run_coro() -> T:
+        try:
+            return asyncio.run(wrapped_coro())
+        except httpx.TimeoutException as e:
+            raise TimeoutError(f"Request timed out: {str(e)}") from e
+        except httpx.NetworkError as e:
+            raise ConnectionError(f"Network error: {str(e)}") from e
+
+    return thread_pool.submit(run_coro).result()
 
 
 class ExtractionAgent:
@@ -76,31 +134,6 @@ class ExtractionAgent:
         self._thread_pool = ThreadPoolExecutor(
             max_workers=min(10, (os.cpu_count() or 1) + 4)
         )
-
-    def _run_in_thread(self, coro: Coroutine[Any, Any, T]) -> T:
-        """Run coroutine in a separate thread to avoid event loop issues"""
-
-        def run_coro() -> T:
-            async def wrapped_coro() -> T:
-                # Get the original client to preserve its configuration
-                original_client = self._client._client_wrapper.httpx_client
-
-                # Create a new client with the same configuration as the original
-                async with httpx.AsyncClient(
-                    verify=self.verify,
-                    timeout=self.httpx_timeout,
-                ) as client:
-                    # Temporarily replace the client
-                    self._client._client_wrapper.httpx_client = client
-                    try:
-                        return await coro
-                    finally:
-                        # Restore the original client
-                        self._client._client_wrapper.httpx_client = original_client
-
-            return asyncio.run(wrapped_coro())
-
-        return self._thread_pool.submit(run_coro).result()
 
     @property
     def id(self) -> str:
@@ -141,26 +174,69 @@ class ExtractionAgent:
     def config(self, config: ExtractConfig) -> None:
         self._config = config
 
-    async def _upload_file(self, file_input: FileInput) -> File:
-        """Upload a file for extraction."""
-        if isinstance(file_input, BufferedIOBase):
-            upload_file = file_input
-        elif isinstance(file_input, bytes):
-            upload_file = BytesIO(file_input)
-        elif isinstance(file_input, (str, Path)):
-            upload_file = open(file_input, "rb")
-        else:
-            raise ValueError(
-                "file_input must be either a file path string, file bytes, or buffer object"
-            )
+    def _run_in_thread(self, coro: Coroutine[Any, Any, T]) -> T:
+        """Run coroutine in a separate thread to avoid event loop issues"""
+        return run_in_thread(
+            coro,
+            self._thread_pool,
+            self.verify,  # type: ignore
+            self.httpx_timeout,  # type: ignore
+            self._client._client_wrapper,
+        )
 
+    async def upload_file(self, file_input: SourceText) -> File:
+        """Upload a file for extraction.
+
+        Args:
+            file_input: The file to upload (path, bytes, or file-like object)
+
+        Raises:
+            ValueError: If filename is not provided for bytes input or for file-like objects
+                       without a name attribute.
+        """
         try:
+            file_contents: Union[BufferedIOBase, BytesIO]
+            if isinstance(file_input.file, (str, Path)):
+                file_contents = open(file_input.file, "rb")
+            elif isinstance(file_input.file, bytes):
+                file_contents = BytesIO(file_input.file)
+            else:
+                file_contents = file_input.file
+            # Add name attribute to file object if needed
+            if not hasattr(file_contents, "name"):
+                file_contents.name = file_input.filename  # type: ignore
+
             return await self._client.files.upload_file(
-                project_id=self._project_id, upload_file=upload_file
+                project_id=self._project_id, upload_file=file_contents
             )
         finally:
-            if isinstance(upload_file, BufferedReader):
-                upload_file.close()
+            if isinstance(file_contents, BufferedReader):
+                file_contents.close()
+
+    async def _upload_file(self, file_input: FileInput) -> File:
+        source_text = None
+        if isinstance(file_input, SourceText):
+            source_text = file_input
+        elif isinstance(file_input, (str, Path)):
+            path = Path(file_input)
+            source_text = SourceText(file=path, filename=path.name)
+        else:
+            # Try to get filename from the file object if not provided
+            filename = None
+            if hasattr(file_input, "name"):
+                filename = os.path.basename(str(file_input.name))
+            if filename is None:
+                raise ValueError(
+                    "Use SourceText to provide filename when uploading bytes or file-like objects."
+                )
+
+            warnings.warn(
+                "Use SourceText instead of bytes or file-like objects",
+                DeprecationWarning,
+            )
+            source_text = SourceText(file=file_input, filename=filename)
+
+        return await self.upload_file(source_text)
 
     async def _wait_for_job_result(self, job_id: str) -> Optional[ExtractRun]:
         """Wait for and return the results of an extraction job."""
@@ -418,6 +494,14 @@ class ExtractionAgent:
     def __repr__(self) -> str:
         return f"ExtractionAgent(id={self.id}, name={self.name})"
 
+    def __del__(self) -> None:
+        """Cleanup resources properly."""
+        try:
+            if hasattr(self, "_thread_pool"):
+                self._thread_pool.shutdown(wait=True)
+        except Exception:
+            pass  # Suppress exceptions during cleanup
+
 
 class LlamaExtract(BaseComponent):
     """Factory class for creating and managing extraction agents."""
@@ -520,31 +604,13 @@ class LlamaExtract(BaseComponent):
 
     def _run_in_thread(self, coro: Coroutine[Any, Any, T]) -> T:
         """Run coroutine in a separate thread to avoid event loop issues"""
-
-        def run_coro() -> T:
-            # Create a new client for this thread
-            async def wrapped_coro() -> T:
-                assert (
-                    self._httpx_client is not None
-                ), "httpx_client should be initialized"
-                # Create a new client with the same configuration as the original
-                async with httpx.AsyncClient(
-                    verify=self.verify,
-                    timeout=self.httpx_timeout,
-                ) as client:
-                    # Temporarily replace the client
-                    self._async_client._client_wrapper.httpx_client = client
-                    try:
-                        return await coro
-                    finally:
-                        # Restore the original client
-                        self._async_client._client_wrapper.httpx_client = (
-                            self._httpx_client
-                        )
-
-            return asyncio.run(wrapped_coro())
-
-        return self._thread_pool.submit(run_coro).result()
+        return run_in_thread(
+            coro,
+            self._thread_pool,
+            self.verify,  # type: ignore
+            self.httpx_timeout,  # type: ignore
+            self._async_client._client_wrapper,
+        )
 
     def create_agent(
         self,
@@ -688,6 +754,14 @@ class LlamaExtract(BaseComponent):
                 extraction_agent_id=agent_id
             )
         )
+
+    def __del__(self) -> None:
+        """Cleanup resources properly."""
+        try:
+            if hasattr(self, "_thread_pool"):
+                self._thread_pool.shutdown(wait=True)
+        except Exception:
+            pass  # Suppress exceptions during cleanup
 
 
 if __name__ == "__main__":
