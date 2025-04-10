@@ -1,7 +1,7 @@
 import asyncio
 import os
 import time
-from io import BufferedIOBase, BufferedReader, BytesIO, TextIOWrapper, StringIO
+from io import BufferedIOBase, BufferedReader, BytesIO, TextIOWrapper
 from pathlib import Path
 from typing import List, Optional, Type, Union, Coroutine, Any, TypeVar
 import warnings
@@ -215,7 +215,7 @@ class ExtractionAgent:
             if file_input.text_content is not None:
                 # Handle direct text content
                 file_contents = BytesIO(file_input.text_content.encode("utf-8"))
-            elif isinstance(file_input.file, (TextIOWrapper, StringIO)):
+            elif isinstance(file_input.file, TextIOWrapper):
                 # Handle text-based IO objects
                 file_contents = BytesIO(file_input.file.read().encode("utf-8"))
             elif isinstance(file_input.file, (str, Path)):
