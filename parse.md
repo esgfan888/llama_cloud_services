@@ -93,6 +93,8 @@ for page in result.pages:
     print(page.structuredData)
 ```
 
+See more details about the result object in the [example notebook](./examples/parse/demo_json_tour.ipynb).
+
 ## Using with file object
 
 You can parse a file object directly:
@@ -151,6 +153,7 @@ Several end-to-end indexing examples can be found in the examples folder
 - [Getting Started](examples/parse/demo_basic.ipynb)
 - [Advanced RAG Example](examples/parse/demo_advanced.ipynb)
 - [Raw API Usage](examples/parse/demo_api.ipynb)
+- [Result Object Tour](examples/parse/demo_json_tour.ipynb)
 
 ## Documentation
 
