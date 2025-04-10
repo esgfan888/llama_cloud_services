@@ -1,17 +1,19 @@
 import httpx
 import os
+import re
 from pydantic import BaseModel, Field, SerializeAsAny
 from typing import Dict, Any, List, Optional
 
 from llama_cloud_services.parse.utils import make_api_request
 from llama_index.core.async_utils import asyncio_run
-from llama_index.core.schema import Document, ImageDocument
+from llama_index.core.schema import Document, ImageDocument, ImageNode, TextNode
+
+PAGE_REGEX = r"page[-_](\d+)\.jpg$"
 
 
 class JobMetadata(BaseModel):
     """Metadata about the job."""
 
-    credits_used: int = Field(description="The number of credits used for the job.")
     job_credits_usage: int = Field(
         default_factory=dict, description="The credits usage for the job."
     )
@@ -186,6 +188,30 @@ class JobResult(BaseModel):
             text = self._page_separator.join([page.text for page in self.pages])
             return [Document(text=text, metadata={"file_name": self.file_name})]
 
+    async def aget_text_documents(self, split_by_page: bool = False) -> List[Document]:
+        """
+        Get the documents from the job.
+
+        Args:
+            split_by_page: Whether to split the pages into separate documents
+        """
+        # No async needed, but here for consistency
+        return self.get_text_documents(split_by_page)
+
+    def get_text_nodes(self, split_by_page: bool = False) -> List[TextNode]:
+        """
+        Get the text nodes from the job.
+        """
+        documents = self.get_text_documents(split_by_page)
+        return [TextNode(text=doc.text, metadata=doc.metadata) for doc in documents]
+
+    async def aget_text_nodes(self, split_by_page: bool = False) -> List[TextNode]:
+        """
+        Get the text nodes from the job.
+        """
+        documents = await self.aget_text_documents(split_by_page)
+        return [TextNode(text=doc.text, metadata=doc.metadata) for doc in documents]
+
     def get_markdown_documents(self, split_by_page: bool = False) -> List[Document]:
         """
         Get the markdown documents from the job.
@@ -209,28 +235,205 @@ class JobResult(BaseModel):
                 )
             ]
 
-    def get_image_documents(self) -> List[ImageDocument]:
+    async def aget_markdown_documents(
+        self, split_by_page: bool = False
+    ) -> List[Document]:
+        """
+        Get the markdown documents from the job.
+
+        Args:
+            split_by_page: Whether to split the pages into separate documents
+        """
+        # No async needed, but here for consistency
+        return self.get_markdown_documents(split_by_page)
+
+    def get_markdown_nodes(self, split_by_page: bool = False) -> List[TextNode]:
+        """
+        Get the markdown nodes from the job.
+
+        Args:
+            split_by_page: Whether to split the pages into separate documents
+        """
+        documents = self.get_markdown_documents(split_by_page)
+        return [TextNode(text=doc.text, metadata=doc.metadata) for doc in documents]
+
+    async def aget_markdown_nodes(self, split_by_page: bool = False) -> List[TextNode]:
+        """
+        Get the markdown nodes from the job.
+
+        Args:
+            split_by_page: Whether to split the pages into separate documents
+        """
+        documents = await self.aget_markdown_documents(split_by_page)
+        return [TextNode(text=doc.text, metadata=doc.metadata) for doc in documents]
+
+    async def _get_image_document_with_bytes(
+        self, image: ImageItem, page: Page
+    ) -> ImageDocument:
+        image_data = await self.aget_image_data(image.name)
+
+        return ImageDocument(
+            image=image_data,
+            metadata={
+                "page_number": page.page,
+                "file_name": self.file_name,
+                "width": image.original_width,
+                "height": image.original_height,
+                "x": image.x,
+                "y": image.y,
+            },
+            excluded_embed_metadata_keys=["width", "height", "x", "y"],
+            excluded_llm_metadata_keys=["width", "height", "x", "y"],
+        )
+
+    async def _get_image_document_with_path(
+        self, image: ImageItem, page: Page, image_download_dir: str
+    ) -> ImageDocument:
+        image_path = await self.asave_image(image.name, image_download_dir)
+
+        return ImageDocument(
+            image_path=image_path,
+            metadata={
+                "page_number": page.page,
+                "file_name": self.file_name,
+                "width": image.original_width,
+                "height": image.original_height,
+                "x": image.x,
+                "y": image.y,
+            },
+            excluded_embed_metadata_keys=["width", "height", "x", "y"],
+            excluded_llm_metadata_keys=["width", "height", "x", "y"],
+        )
+
+    def get_image_documents(
+        self,
+        include_screenshot_images: bool = True,
+        include_object_images: bool = True,
+        image_download_dir: Optional[str] = None,
+    ) -> List[ImageDocument]:
         """
         Get the image documents from the job.
+
+        Args:
+            include_screenshot_images (bool):
+                Whether to include screenshot images. Default is True.
+            include_object_images (bool):
+                Whether to include object images. Default is True.
+            image_download_dir (Optional[str]):
+                The directory to save the images to. If not provided, the images will be loaded into memory.
+                Default is None.
+        """
+        return asyncio_run(
+            self.aget_image_documents(
+                include_screenshot_images, include_object_images, image_download_dir
+            )
+        )
+
+    async def aget_image_documents(
+        self,
+        include_screenshot_images: bool = True,
+        include_object_images: bool = True,
+        image_download_dir: Optional[str] = None,
+    ) -> List[ImageDocument]:
+        """
+        Get the image documents from the job.
+
+        Args:
+            include_screenshot_images (bool):
+                Whether to include screenshot images. Default is True.
+            include_object_images (bool):
+                Whether to include object images. Default is True.
+            image_download_dir (Optional[str]):
+                The directory to save the images to. If not provided, the images will be loaded into memory.
+                Default is None.
         """
         documents = []
         for page in self.pages:
             for image in page.images:
+                is_screenshot = re.search(PAGE_REGEX, image.name) is not None
+
+                # Skip images that don't match the inclusion criteria
+                if (is_screenshot and not include_screenshot_images) or (
+                    not is_screenshot and not include_object_images
+                ):
+                    continue
+
+                # Get image document using appropriate method based on download_dir
+                get_document = (
+                    self._get_image_document_with_path
+                    if image_download_dir
+                    else self._get_image_document_with_bytes
+                )
+
                 documents.append(
-                    ImageDocument(
-                        image_url=f"{self._base_url}/api/v1/parsing/job/{self.job_id}/result/image/{image.name}",
-                        metadata={
-                            "page_number": page.page,
-                            "file_name": self.file_name,
-                            "width": image.original_width,
-                            "height": image.original_height,
-                            "x": image.x,
-                            "y": image.y,
-                        },
-                    )
+                    await get_document(image, page, image_download_dir)  # type: ignore
+                    if image_download_dir
+                    else await get_document(image, page)  # type: ignore
                 )
 
         return documents
+
+    def get_image_nodes(
+        self,
+        include_screenshot_images: bool = True,
+        include_object_images: bool = True,
+        image_download_dir: Optional[str] = None,
+    ) -> List[ImageNode]:
+        """
+        Get the image nodes from the job.
+
+        Args:
+            include_screenshot_images (bool):
+                Whether to include screenshot images. Default is True.
+            include_object_images (bool):
+                Whether to include object images. Default is True.
+            image_download_dir (Optional[str]):
+                The directory to save the images to. If not provided, the images will be loaded into memory.
+                Default is None.
+        """
+        documents = self.get_image_documents(
+            include_screenshot_images, include_object_images, image_download_dir
+        )
+        return [
+            ImageNode(
+                image=doc.image,
+                image_path=doc.image_path,
+                image_url=doc.image_url,
+                metadata=doc.metadata,
+            )
+            for doc in documents
+        ]
+
+    async def aget_image_nodes(
+        self,
+        include_screenshot_images: bool = True,
+        include_object_images: bool = True,
+        image_download_dir: Optional[str] = None,
+    ) -> List[ImageNode]:
+        """
+        Get the image nodes from the job.
+
+        Args:
+            include_screenshot_images (bool):
+                Whether to include screenshot images. Default is True.
+            include_object_images (bool):
+                Whether to include object images. Default is True.
+            image_download_dir (Optional[str]):
+                The directory to save the images to. If not provided, the images will be loaded into memory.
+                Default is None.
+        """
+        documents = await self.aget_image_documents(
+            include_screenshot_images, include_object_images, image_download_dir
+        )
+        return [
+            ImageNode(
+                image=doc.image,
+                image_path=doc.image_path,
+                image_url=doc.image_url,
+                metadata=doc.metadata,
+            )
+            for doc in documents
+        ]
 
     async def aget_image_data(self, image_name: str) -> bytes:
         """
