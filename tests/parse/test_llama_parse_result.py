@@ -16,6 +16,10 @@ def chart_file_path() -> str:
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(
+    os.environ.get("LLAMA_CLOUD_API_KEY", "") == "",
+    reason="LLAMA_CLOUD_API_KEY not set",
+)
 async def test_basic_parse_result(file_path: str):
     parser = LlamaParse(
         take_screenshot=True,
@@ -63,9 +67,12 @@ async def test_basic_parse_result(file_path: str):
     assert markdown_documents[0].text is not None
     assert len(markdown_documents[0].text) > 0
 
-    image_documents = result.get_image_documents()
+    image_documents = await result.aget_image_documents(
+        include_screenshot_images=True,
+        include_object_images=False,
+    )
     assert len(image_documents) > 0
-    assert image_documents[0].image_url is not None
+    assert image_documents[0].image is not None
     assert len(image_documents[0].resolve_image().getvalue()) > 0
 
 
@@ -85,6 +92,10 @@ async def test_link_parse_result(file_path: str):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(
+    os.environ.get("LLAMA_CLOUD_API_KEY", "") == "",
+    reason="LLAMA_CLOUD_API_KEY not set",
+)
 async def test_parse_structured_output(file_path: str):
     parser = LlamaParse(
         structured_output=True,
@@ -97,6 +108,10 @@ async def test_parse_structured_output(file_path: str):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(
+    os.environ.get("LLAMA_CLOUD_API_KEY", "") == "",
+    reason="LLAMA_CLOUD_API_KEY not set",
+)
 async def test_parse_charts(chart_file_path: str):
     parser = LlamaParse(
         extract_charts=True,
@@ -108,6 +123,10 @@ async def test_parse_charts(chart_file_path: str):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(
+    os.environ.get("LLAMA_CLOUD_API_KEY", "") == "",
+    reason="LLAMA_CLOUD_API_KEY not set",
+)
 async def test_parse_layout(file_path: str):
     parser = LlamaParse(
         extract_layout=True,
@@ -119,6 +138,10 @@ async def test_parse_layout(file_path: str):
     assert len(result.pages[0].layout) > 0
 
 
+@pytest.mark.skipif(
+    os.environ.get("LLAMA_CLOUD_API_KEY", "") == "",
+    reason="LLAMA_CLOUD_API_KEY not set",
+)
 def test_parse_multiple_files(file_path: str, chart_file_path: str):
     parser = LlamaParse()
     result = parser.parse([file_path, chart_file_path])
