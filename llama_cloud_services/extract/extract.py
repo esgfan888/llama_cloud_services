@@ -4,6 +4,7 @@ import time
 from io import BufferedIOBase, BufferedReader, BytesIO, TextIOWrapper
 from pathlib import Path
 from typing import List, Optional, Type, Union, Coroutine, Any, TypeVar
+import secrets
 import warnings
 import httpx
 from pydantic import BaseModel
@@ -62,7 +63,8 @@ class SourceText:
             raise ValueError("Either file or text_content must be provided.")
         if self.text_content is not None:
             if not self.filename:
-                self.filename = "text_input.txt"
+                random_hex = secrets.token_hex(4)
+                self.filename = f"text_input_{random_hex}.txt"
             return
 
         if isinstance(self.file, (bytes, BufferedIOBase, TextIOWrapper)):
