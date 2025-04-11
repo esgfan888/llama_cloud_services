@@ -25,6 +25,8 @@ Then, install the package:
 
 `pip install llama-cloud-services`
 
+## CLI Usage
+
 Now you can parse your first PDF file using the command line interface. Use the command `llama-parse [file_paths]`. See the help text with `llama-parse --help`.
 
 ```bash
@@ -39,6 +41,8 @@ llama-parse my_file.pdf --result-type markdown --output-file output.md
 # output as raw json
 llama-parse my_file.pdf --output-raw-json --output-file output.json
 ```
+
+## Python Usage
 
 You can also create simple scripts:
 
@@ -95,7 +99,7 @@ for page in result.pages:
 
 See more details about the result object in the [example notebook](./examples/parse/demo_json_tour.ipynb).
 
-## Using with file object
+### Using with file object / bytes
 
 You can parse a file object directly:
 
@@ -104,7 +108,6 @@ from llama_cloud_services import LlamaParse
 
 parser = LlamaParse(
     api_key="llx-...",  # can also be set in your env as LLAMA_CLOUD_API_KEY
-    result_type="markdown",  # "markdown" and "text" are available
     num_workers=4,  # if multiple files passed, split in `num_workers` API calls
     verbose=True,
     language="en",  # Optionally you can define a language, default=en
@@ -124,7 +127,7 @@ with open(f"./{file_name}", "rb") as f:
     result = parser.parse(file_bytes, extra_info=extra_info)
 ```
 
-## Using with `SimpleDirectoryReader`
+### Using with `SimpleDirectoryReader`
 
 You can also integrate the parser as the default PDF loader in `SimpleDirectoryReader`:
 
