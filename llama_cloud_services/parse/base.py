@@ -267,6 +267,10 @@ class LlamaParse(BasePydanticReader):
     language: Optional[str] = Field(
         default="en", description="The language of the text to parse."
     )
+    markdown_table_multiline_header_separator: Optional[str] = Field(
+        default=None,
+        description="The separator to use to split the header of the markdown table into multiple lines. Default is: <br/>",
+    )
     max_pages: Optional[int] = Field(
         default=None,
         description="The maximum number of pages to extract text from documents. If set to 0 or not set, all pages will be that should be extracted will be extracted (can work in combination with targetPages).",
@@ -797,6 +801,9 @@ class LlamaParse(BasePydanticReader):
 
         if self.webhook_url is not None:
             data["webhook_url"] = self.webhook_url
+
+        if self.markdown_table_multiline_header_separator is not None:
+            data["markdown_table_multiline_header_separator"] = self.markdown_table_multiline_header_separator
 
         # Deprecated
         if self.bounding_box is not None:
