@@ -803,7 +803,9 @@ class LlamaParse(BasePydanticReader):
             data["webhook_url"] = self.webhook_url
 
         if self.markdown_table_multiline_header_separator is not None:
-            data["markdown_table_multiline_header_separator"] = self.markdown_table_multiline_header_separator
+            data[
+                "markdown_table_multiline_header_separator"
+            ] = self.markdown_table_multiline_header_separator
 
         # Deprecated
         if self.bounding_box is not None:
